@@ -114,7 +114,17 @@ float PS4_SYSV_ABI internal_log10f(float x) {
     return log10f(x);
 }
 
+static double PS4_SYSV_ABI mono_fmod(double x, double y) { return std::fmod(x, y); }
+static int PS4_SYSV_ABI mono_signbit(double x) { return std::signbit(x); }
+static int PS4_SYSV_ABI mono_isnan(double x) { return std::isnan(x); }
+
 void RegisterlibSceLibcInternalMath(Core::Loader::SymbolsResolver* sym) {
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO"); enabled && std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("pKwslsMUmSk", "libSceLibcInternal", 1, "libSceLibcInternal", mono_fmod);
+        LIB_FUNCTION("Rw4J-22tu1U", "libSceLibcInternal", 1, "libSceLibcInternal", mono_signbit);
+        LIB_FUNCTION("GfxAp9Xyiqs", "libSceLibcInternal", 1, "libSceLibcInternal", mono_isnan);
+    }
+
     LIB_FUNCTION("H8ya2H00jbI", "libSceLibcInternal", 1, "libSceLibcInternal", internal_sin);
     LIB_FUNCTION("Q4rRL34CEeE", "libSceLibcInternal", 1, "libSceLibcInternal", internal_sinf);
     LIB_FUNCTION("2WE3BTYVwKM", "libSceLibcInternal", 1, "libSceLibcInternal", internal_cos);

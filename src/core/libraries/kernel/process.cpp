@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/elf_info.h"
+#include "common/string_util.h"
+#include "core/aerolib/aerolib.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 #include "core/file_sys/fs.h"
@@ -11,6 +13,14 @@
 #include "core/linker.h"
 
 namespace Libraries::Kernel {
+// A discoverable handle for the emulator's existing kernel HLE exports.
+// No guest code/data segments or firmware are fabricated for this module.
+static constexpr s32 MonoKernelHandle = 0x7fff0001;
+static bool MonoKernelEnabled() {
+    const auto* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO");
+    return enabled && std::strcmp(enabled, "1") == 0;
+}
+
 
 s32 PS4_SYSV_ABI sceKernelIsInSandbox() {
     return 1;
@@ -116,6 +126,22 @@ s32 PS4_SYSV_ABI sceKernelLoadStartModule(const char* moduleFileName, u64 args, 
 }
 
 s32 PS4_SYSV_ABI sceKernelDlsym(s32 handle, const char* symbol, void** addrp) {
+    if (!symbol || !addrp) return ORBIS_KERNEL_ERROR_EFAULT;
+    if (MonoKernelEnabled() && handle == MonoKernelHandle) {
+        *addrp = nullptr;
+        auto* linker = Common::Singleton<Core::Linker>::Instance();
+        for (const auto& entry : linker->GetHLESymbols().GetSymbols()) {
+            const auto fields = Common::SplitString(entry.name, '#');
+            if (fields.size() != 5 || fields[1] != "libkernel" || fields[3] != "libkernel") continue;
+            const auto* nid = Core::AeroLib::FindByNid(fields[0].c_str());
+            if (nid && std::strcmp(nid->name, symbol) == 0) {
+                *addrp = reinterpret_cast<void*>(entry.virtual_address);
+                return ORBIS_OK;
+            }
+        }
+        return ORBIS_KERNEL_ERROR_ESRCH;
+    }
+
     auto* linker = Common::Singleton<Core::Linker>::Instance();
     auto* module = linker->GetModule(handle);
     if (module == nullptr) {
@@ -190,6 +216,12 @@ s32 PS4_SYSV_ABI sceKernelGetModuleInfo(s32 handle, Core::OrbisKernelModuleInfo*
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
 
+    if (MonoKernelEnabled() && handle == MonoKernelHandle) {
+        *info = {};
+        std::strcpy(info->name.data(), "libkernel");
+        return ORBIS_OK;
+    }
+
     auto* linker = Common::Singleton<Core::Linker>::Instance();
     auto* module = linker->GetModule(handle);
     if (module == nullptr) {
@@ -205,6 +237,12 @@ s32 PS4_SYSV_ABI sceKernelGetModuleInfo2(s32 handle, Core::OrbisKernelModuleInfo
     }
     if (info->st_size != sizeof(Core::OrbisKernelModuleInfo)) {
         return ORBIS_KERNEL_ERROR_EINVAL;
+    }
+
+    if (MonoKernelEnabled() && handle == MonoKernelHandle) {
+        *info = {};
+        std::strcpy(info->name.data(), "libkernel");
+        return ORBIS_OK;
     }
 
     auto* linker = Common::Singleton<Core::Linker>::Instance();
@@ -254,6 +292,10 @@ s32 PS4_SYSV_ABI sceKernelGetModuleList(s32* handles, u64 num_array, u64* out_co
         return ORBIS_KERNEL_ERROR_ENOMEM;
     }
 
+    if (MonoKernelEnabled()) {
+        if (count == num_array) return ORBIS_KERNEL_ERROR_ENOMEM;
+        handles[count++] = MonoKernelHandle;
+    }
     *out_count = count;
     return ORBIS_OK;
 }

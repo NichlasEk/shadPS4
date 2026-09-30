@@ -6,11 +6,46 @@
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "libc_internal_memory.h"
+#include "mono_mspace.h"
 
 namespace Libraries::LibcInternal {
 
+static MonoMspaces mono_mspaces;
+
+static void* PS4_SYSV_ABI mono_mspace_create(const char* name, void* base, size_t capacity,
+                                             unsigned flags) {
+    void* handle = mono_mspaces.Create(base, capacity, flags);
+    LOG_INFO(Lib_LibcInternal,
+             "Experimental Mono mspace: name={} base={} size={:#x} flags={:#x} handle={}",
+             name ? name : "(null)", base, capacity, flags, handle);
+    return handle;
+}
+static void* PS4_SYSV_ABI mono_mspace_malloc(void* handle, size_t size) {
+    auto space = mono_mspaces.Find(handle);
+    return space ? space->Allocate(size) : nullptr;
+}
+static void* PS4_SYSV_ABI mono_mspace_calloc(void* handle, size_t count, size_t size) {
+    auto space = mono_mspaces.Find(handle);
+    return space ? space->Calloc(count, size) : nullptr;
+}
+static void* PS4_SYSV_ABI mono_mspace_realloc(void* handle, void* pointer, size_t size) {
+    auto space = mono_mspaces.Find(handle);
+    return space ? space->Reallocate(pointer, size) : nullptr;
+}
+static void PS4_SYSV_ABI mono_mspace_free(void* handle, void* pointer) {
+    auto space = mono_mspaces.Find(handle);
+    if (!space || !space->Free(pointer)) {
+        LOG_ERROR(Lib_LibcInternal, "Invalid experimental mspace free: handle={} pointer={}",
+                  handle, pointer);
+    }
+}
+
 void* PS4_SYSV_ABI internal_memset(void* s, int c, size_t n) {
     return std::memset(s, c, n);
+}
+
+static void* PS4_SYSV_ABI mono_memmove(void* dst, const void* src, size_t count) {
+    return std::memmove(dst, src, count);
 }
 
 void* PS4_SYSV_ABI internal_memcpy(void* dest, const void* src, size_t n) {
@@ -48,6 +83,21 @@ void PS4_SYSV_ABI sceLibcHeapGetTraceInfo(HeapInfoInfo* info) {
 }
 
 void RegisterlibSceLibcInternalMemory(Core::Loader::SymbolsResolver* sym) {
+
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO");
+        enabled && std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("+P6FRGH4LfA", "libSceLibcInternal", 1, "libSceLibcInternal", mono_memmove);
+        LIB_FUNCTION("-hn1tcVHq5Q", "libSceLibcInternal", 1, "libSceLibcInternal",
+                     mono_mspace_create);
+        LIB_FUNCTION("OJjm-QOIHlI", "libSceLibcInternal", 1, "libSceLibcInternal",
+                     mono_mspace_malloc);
+        LIB_FUNCTION("LYo3GhIlB38", "libSceLibcInternal", 1, "libSceLibcInternal",
+                     mono_mspace_calloc);
+        LIB_FUNCTION("gigoVHZvVPE", "libSceLibcInternal", 1, "libSceLibcInternal",
+                     mono_mspace_realloc);
+        LIB_FUNCTION("Vla-Z+eXlxo", "libSceLibcInternal", 1, "libSceLibcInternal",
+                     mono_mspace_free);
+    }
 
     LIB_FUNCTION("NFLs+dRJGNg", "libSceLibcInternal", 1, "libSceLibcInternal", internal_memcpy_s);
     LIB_FUNCTION("Q3VBxCXhUHs", "libSceLibcInternal", 1, "libSceLibcInternal", internal_memcpy);

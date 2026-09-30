@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <thread>
+#ifdef __linux__
+#include <sys/resource.h>
+#endif
 #include <boost/asio/io_context.hpp>
 
 #include "common/assert.h"
@@ -437,7 +440,49 @@ u64 PS4_SYSV_ABI posix_sysconf(s32 name) {
     }
 }
 
+
+#ifdef __linux__
+struct MonoRlimit { u64 current; u64 maximum; };
+static s32 PS4_SYSV_ABI mono_getrlimit(s32 resource, MonoRlimit* output) {
+    if (!output) { *__Error() = POSIX_EFAULT; return -1; }
+    int native;
+    switch (resource) {
+    case 0: native = RLIMIT_CPU; break;
+    case 1: native = RLIMIT_FSIZE; break;
+    case 2: native = RLIMIT_DATA; break;
+    case 3: native = RLIMIT_STACK; break;
+    case 4: native = RLIMIT_CORE; break;
+    case 5: native = RLIMIT_RSS; break;
+    case 6: native = RLIMIT_MEMLOCK; break;
+    case 7: native = RLIMIT_NPROC; break;
+    case 8: native = RLIMIT_NOFILE; break;
+    case 10: native = RLIMIT_AS; break;
+    default: *__Error() = POSIX_EINVAL; return -1;
+    }
+    struct rlimit limit{};
+    if (::getrlimit(native, &limit) != 0) { SetPosixErrno(errno); return -1; }
+    output->current = std::min<u64>(limit.rlim_cur, INT64_MAX);
+    output->maximum = std::min<u64>(limit.rlim_max, INT64_MAX);
+    return 0;
+}
+static s32 PS4_SYSV_ABI mono_sysctl(const s32* name, u32 count, void* output, size_t* length,
+                                  const void* input, size_t input_length) {
+    LOG_INFO(Lib_Kernel, "Mono sysctl count={} key={},{}", count,
+             name && count ? name[0] : -1, name && count > 1 ? name[1] : -1);
+    // Unknown MIBs must fail, never claim success with uninitialized output.
+    *__Error() = POSIX_ENOENT;
+    return -1;
+}
+#endif
+
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
+#ifdef __linux__
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO"); enabled && std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("Wh7HbV7JFqc", "libkernel", 1, "libkernel", mono_getrlimit);
+        LIB_FUNCTION("DFmMT80xcNI", "libkernel", 1, "libkernel", mono_sysctl);
+    }
+#endif
+
     service_thread = std::jthread{KernelServiceThread};
 
     static char const** kernel_environ = g_environment;

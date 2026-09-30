@@ -20,8 +20,10 @@
 
 namespace Libraries::LibcInternal {
 
-s32 PS4_SYSV_ABI internal_snprintf(char* s, u64 n, VA_ARGS) {
+s32 PS4_SYSV_ABI internal_snprintf(VA_ARGS) {
     VA_CTX(ctx);
+    char* s = Common::vaArgPtr<char>(&ctx.va_list);
+    const auto n = static_cast<size_t>(Common::vaArgLongLong(&ctx.va_list));
     return snprintf_ctx(s, n, &ctx);
 }
 
@@ -464,7 +466,108 @@ s32 PS4_SYSV_ABI internal_fclose(OrbisFILE* file) {
     return 0;
 }
 
+struct MonoDirectory {
+    s32 fd;
+    size_t next = 0, available = 0;
+    alignas(8) char buffer[4096];
+};
+static MonoDirectory* PS4_SYSV_ABI mono_opendir(const char* path) {
+    if (!path) { *Kernel::__Error() = POSIX_EFAULT; return nullptr; }
+    const auto fd = Kernel::posix_open(path, Kernel::ORBIS_KERNEL_O_DIRECTORY, 0);
+    if (fd < 0) return nullptr;
+    auto* dir = new(std::nothrow) MonoDirectory;
+    if (!dir) { Kernel::posix_close(fd); *Kernel::__Error() = POSIX_ENOMEM; return nullptr; }
+    dir->fd = fd;
+    return dir;
+}
+static Kernel::OrbisKernelDirent* PS4_SYSV_ABI mono_readdir(MonoDirectory* dir) {
+    if (!dir) { *Kernel::__Error() = POSIX_EBADF; return nullptr; }
+    for (;;) {
+        if (dir->next == dir->available) {
+            const auto count = Kernel::posix_getdents(dir->fd, dir->buffer, sizeof(dir->buffer));
+            if (count <= 0) return nullptr;
+            dir->next = 0; dir->available = count;
+        }
+        const size_t left = dir->available - dir->next;
+        auto* entry = reinterpret_cast<Kernel::OrbisKernelDirent*>(dir->buffer + dir->next);
+        if (left < 8 || entry->d_reclen < 8 || entry->d_reclen > left ||
+            8u + entry->d_namlen >= entry->d_reclen) {
+            *Kernel::__Error() = POSIX_EIO; return nullptr;
+        }
+        dir->next += entry->d_reclen;
+        if (entry->d_fileno) return entry;
+    }
+}
+static s32 PS4_SYSV_ABI mono_closedir(MonoDirectory* dir) {
+    if (!dir) { *Kernel::__Error() = POSIX_EBADF; return -1; }
+    const auto result = Kernel::posix_close(dir->fd);
+    delete dir;
+    return result;
+}
+static void PS4_SYSV_ABI mono_rewinddir(MonoDirectory* dir) {
+    if (!dir) { *Kernel::__Error() = POSIX_EBADF; return; }
+    if (Kernel::posix_lseek(dir->fd, 0, 0) >= 0) dir->next = dir->available = 0;
+}
+
+// Experimental libc bridge: guest SysV va_list and guest FILE are decoded
+// explicitly. Neither is passed to the host C library.
+static OrbisFILE mono_stderr_file = [] { OrbisFILE f{}; f._Handle = 2; f._Mode = 2; return f; }();
+
+static OrbisFILE mono_stdout_file = [] { OrbisFILE f{}; f._Handle = 1; f._Mode = 2; return f; }();
+
+static s32 PS4_SYSV_ABI mono_vsnprintf(char* dst, size_t size, const char* format,
+                                     Common::VaList* args) {
+    if (!format || !args || (size && !dst)) return -1;
+    auto copy = *args;
+    return _vsnprintf(_out_buffer, dst, format, &copy, size);
+}
+
+static size_t PS4_SYSV_ABI mono_fwrite(const void* data, size_t size, size_t count, OrbisFILE* file) {
+    if (!size || !count) return 0;
+    if (!data || !file || count > SIZE_MAX / size) return 0;
+    size_t written = 0;
+    while (written < size * count) {
+        const auto n = Kernel::sceKernelWrite(file->_Handle, static_cast<const char*>(data) + written,
+                                              size * count - written);
+        if (n <= 0) break;
+        written += n;
+    }
+    return written / size;
+}
+
+static s32 PS4_SYSV_ABI mono_fprintf(VA_ARGS) {
+    VA_CTX(ctx);
+    auto* file = Common::vaArgPtr<OrbisFILE>(&ctx.va_list);
+    const auto* format = Common::vaArgPtr<const char>(&ctx.va_list);
+    if (!file || !format) return -1;
+    auto copy = ctx.va_list;
+    const int size = _vsnprintf(_out_null, nullptr, format, &copy, 0);
+    if (size < 0) return -1;
+    std::vector<char> buffer(static_cast<size_t>(size) + 1);
+    _vsnprintf(_out_buffer, buffer.data(), format, &ctx.va_list, buffer.size());
+    size_t written = 0;
+    while (written < static_cast<size_t>(size)) {
+        const auto n = Kernel::sceKernelWrite(file->_Handle, buffer.data() + written, size - written);
+        if (n <= 0) return -1;
+        written += n;
+    }
+    return size;
+}
+
 void RegisterlibSceLibcInternalIo(Core::Loader::SymbolsResolver* sym) {
+    const char* experiment = std::getenv("SHADPS4_EXPERIMENTAL_MONO");
+    if (experiment && std::strcmp(experiment, "1") == 0) {
+        LIB_FUNCTION("ay3uROQAc5A", "libSceLibcInternal", 1, "libSceLibcInternal", mono_opendir);
+        LIB_FUNCTION("lybyyKtP54c", "libSceLibcInternal", 1, "libSceLibcInternal", mono_readdir);
+        LIB_FUNCTION("XepdqehVYe4", "libSceLibcInternal", 1, "libSceLibcInternal", mono_closedir);
+        LIB_FUNCTION("kCKHi6JYtmM", "libSceLibcInternal", 1, "libSceLibcInternal", mono_rewinddir);
+        LIB_OBJ("2sWzhYqFH4E", "libSceLibcInternal", 1, "libSceLibcInternal", &mono_stdout_file);
+        LIB_OBJ("H8AprKeZtNg", "libSceLibcInternal", 1, "libSceLibcInternal", &mono_stderr_file);
+        LIB_FUNCTION("MpxhMh8QFro", "libSceLibcInternal", 1, "libSceLibcInternal", mono_fwrite);
+        LIB_FUNCTION("Q2V+iqvjgC0", "libSceLibcInternal", 1, "libSceLibcInternal", mono_vsnprintf);
+        LIB_FUNCTION("fffwELXNVFA", "libSceLibcInternal", 1, "libSceLibcInternal", mono_fprintf);
+    }
+
     LIB_FUNCTION("eLdDw6l0-bU", "libSceLibcInternal", 1, "libSceLibcInternal", internal_snprintf);
     LIB_FUNCTION("xGT4Mc55ViQ", "libSceLibcInternal", 1, "libSceLibcInternal", internal__Fofind);
     LIB_FUNCTION("dREVnZkAKRE", "libSceLibcInternal", 1, "libSceLibcInternal", internal__Foprep);

@@ -77,7 +77,7 @@ struct OrbisFILE {
     Orbis__mbstate_t _mbstate;
 };
 
-s32 PS4_SYSV_ABI internal_snprintf(char* s, u64 n, VA_ARGS);
+s32 PS4_SYSV_ABI internal_snprintf(VA_ARGS);
 void PS4_SYSV_ABI internal__Lockfilelock(OrbisFILE* file);
 void PS4_SYSV_ABI internal__Unlockfilelock(OrbisFILE* file);
 OrbisFILE* PS4_SYSV_ABI internal__Fofind();

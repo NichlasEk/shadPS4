@@ -410,10 +410,9 @@ static inline size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t ma
 
 // internal vsnprintf
 static inline int _vsnprintf(out_fct_type out, char* buffer, const char* format,
-                             Common::VaList* va_list) {
+                             Common::VaList* va_list, size_t maxlen = static_cast<size_t>(-1)) {
     unsigned int flags, width, precision, n;
     size_t idx = 0U;
-    auto maxlen = static_cast<size_t>(-1);
 
     if (!buffer) {
         // use null output function
@@ -732,7 +731,7 @@ static inline int _vsnprintf(out_fct_type out, char* buffer, const char* format,
 static int printf_ctx(Common::VaCtx* ctx) {
     const char* format = vaArgPtr<const char>(&ctx->va_list);
     char buffer[256];
-    int result = _vsnprintf(_out_buffer, buffer, format, &ctx->va_list);
+    int result = _vsnprintf(_out_buffer, buffer, format, &ctx->va_list, sizeof(buffer));
     printf("%s", buffer);
     return result;
 }
@@ -740,24 +739,18 @@ static int printf_ctx(Common::VaCtx* ctx) {
 static int fprintf_ctx(Common::VaCtx* ctx, char* buf) {
     const char* format = vaArgPtr<const char>(&ctx->va_list);
     char buffer[256];
-    int result = _vsnprintf(_out_buffer, buffer, format, &ctx->va_list);
+    int result = _vsnprintf(_out_buffer, buffer, format, &ctx->va_list, sizeof(buffer));
     std::strcpy(buf, buffer);
     return result;
 }
 
 static int vsnprintf_ctx(char* s, size_t n, const char* format, Common::VaList* arg) {
-    std::vector<char> buffer(n);
-    int result = _vsnprintf(_out_buffer, buffer.data(), format, arg);
-    std::strcpy(s, buffer.data());
-    return result;
+    return _vsnprintf(_out_buffer, s, format, arg, n);
 }
 
 static int snprintf_ctx(char* s, size_t n, Common::VaCtx* ctx) {
     const char* format = vaArgPtr<const char>(&ctx->va_list);
-    std::vector<char> buffer(n);
-    int result = _vsnprintf(_out_buffer, buffer.data(), format, &ctx->va_list);
-    std::strcpy(s, buffer.data());
-    return result;
+    return _vsnprintf(_out_buffer, s, format, &ctx->va_list, n);
 }
 
 } // namespace Libraries::LibcInternal

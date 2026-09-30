@@ -1567,6 +1567,13 @@ s32 PS4_SYSV_ABI posix_select(s32 nfds, fd_set* readfds, fd_set* writefds, fd_se
 #endif
 
 void RegisterFileSystem(Core::Loader::SymbolsResolver* sym) {
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO"); enabled && std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("8vE6Z6VEYyk", "libkernel", 1, "libkernel", posix_access);
+        // This VFS exposes no guest symlink nodes: host symlinks belong to mount
+        // implementation. lstat therefore has the same guest semantics as stat.
+        LIB_FUNCTION("DRGXpDDh8Ng", "libkernel", 1, "libkernel", posix_stat);
+    }
+
     LIB_FUNCTION("6c3rCVE-fTU", "libkernel", 1, "libkernel", open);
     LIB_FUNCTION("wuCroIGjt2g", "libScePosix", 1, "libkernel", posix_open);
     LIB_FUNCTION("wuCroIGjt2g", "libkernel", 1, "libkernel", posix_open);

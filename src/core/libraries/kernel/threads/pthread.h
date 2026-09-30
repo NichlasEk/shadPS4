@@ -322,6 +322,8 @@ struct Pthread {
     bool has_user_waiters;
     int nwaiter_defer;
     WakeSemaphore* defer_waiters[MaxDeferWaiters]{};
+    std::atomic<int> mono_suspend_state{0};
+    void* mono_suspend_context{};
     Pthread* join_target{};
     std::mutex join_wait_mutex;
     std::condition_variable join_wait_cv;

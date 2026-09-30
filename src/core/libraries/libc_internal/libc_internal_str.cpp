@@ -6,6 +6,7 @@
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "libc_internal_str.h"
+#include "mono_safe_string.h"
 
 namespace Libraries::LibcInternal {
 
@@ -44,12 +45,7 @@ char* PS4_SYSV_ABI internal_strncpy(char* dest, const char* src, std::size_t cou
 }
 
 s32 PS4_SYSV_ABI internal_strncpy_s(char* dest, size_t destsz, const char* src, size_t count) {
-#ifdef _WIN64
-    return strncpy_s(dest, destsz, src, count);
-#else
-    std::strcpy(dest, src);
-    return 0;
-#endif
+    return MonoStrncpyS(dest, destsz, src, count);
 }
 
 char* PS4_SYSV_ABI internal_strcat(char* dest, const char* src) {
@@ -60,7 +56,25 @@ const char* PS4_SYSV_ABI internal_strchr(const char* str, int c) {
     return std::strchr(str, c);
 }
 
+static char* PS4_SYSV_ABI mono_strcpy(char* dst, const char* src) {
+    return std::strcpy(dst, src);
+}
+
+static const char* PS4_SYSV_ABI mono_strstr(const char* text, const char* part) {
+    return std::strstr(text, part);
+}
+
+static const char* PS4_SYSV_ABI mono_strrchr(const char* text, int c) {
+    return std::strrchr(text, c);
+}
+
 void RegisterlibSceLibcInternalStr(Core::Loader::SymbolsResolver* sym) {
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO"); enabled && std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("kiZSXIWd9vg", "libSceLibcInternal", 1, "libSceLibcInternal", mono_strcpy);
+        LIB_FUNCTION("viiwFMaNamA", "libSceLibcInternal", 1, "libSceLibcInternal", mono_strstr);
+        LIB_FUNCTION("9yDWMxEFdJU", "libSceLibcInternal", 1, "libSceLibcInternal", mono_strrchr);
+    }
+
     LIB_FUNCTION("5Xa2ACNECdo", "libSceLibcInternal", 1, "libSceLibcInternal", internal_strcpy_s);
     LIB_FUNCTION("K+gcnFFJKVc", "libSceLibcInternal", 1, "libSceLibcInternal", internal_strcat_s);
     LIB_FUNCTION("Ovb2dSJOAuE", "libSceLibcInternal", 1, "libSceLibcInternal", internal_strcmp);

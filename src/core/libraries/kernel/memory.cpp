@@ -16,6 +16,7 @@
 #include "core/libraries/libs.h"
 #include "core/linker.h"
 #include "core/memory.h"
+#include "mono_jit.h"
 
 namespace Libraries::Kernel {
 
@@ -893,6 +894,14 @@ s32 PS4_SYSV_ABI sceKernelGetPrtAperture(s32 id, VAddr* address, u64* size) {
 }
 
 void RegisterMemory(Core::Loader::SymbolsResolver* sym) {
+#ifdef __linux__
+    if (const char* enabled = std::getenv("SHADPS4_EXPERIMENTAL_MONO"); enabled &&
+        std::strcmp(enabled, "1") == 0) {
+        LIB_FUNCTION("avvJ3J0H0EY", "libkernel", 1, "libkernel", mono_jit_create);
+        LIB_FUNCTION("MR221Mwo0Pc", "libkernel", 1, "libkernel", mono_jit_alias);
+        LIB_FUNCTION("YKT49TOLQWs", "libkernel", 1, "libkernel", mono_jit_map);
+    }
+#endif
     ASSERT_MSG(sceKernelGetCompiledSdkVersion(&g_sdk_version) == ORBIS_OK,
                "Failed to get compiled SDK verision.");
 

@@ -11,6 +11,7 @@
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/process.h"
 #include "core/memory.h"
+#include "core/mono_jit_memory.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 namespace Core {
@@ -710,6 +711,18 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
         return ORBIS_KERNEL_ERROR_EBADF;
     }
 
+    if (file->mono_jit) {
+        const u32 requested = static_cast<u32>(prot) |
+                              (True(prot & MemoryProt::CpuWrite) ? 1u : 0u);
+        if ((requested & ~file->mono_jit_protection) != 0) {
+            return ORBIS_KERNEL_ERROR_EACCES;
+        }
+        if (phys_addr < 0 || static_cast<u64>(phys_addr) > file->GetSize() ||
+            size > file->GetSize() - static_cast<u64>(phys_addr)) {
+            return ORBIS_KERNEL_ERROR_EINVAL;
+        }
+    }
+
     if (True(prot & MemoryProt::CpuWrite)) {
         // On PS4, read is appended to write mappings.
         prot |= MemoryProt::CpuRead;
@@ -739,7 +752,7 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
         ASSERT_MSG(false, "Files cannot be mapped to GPU memory");
     }
 
-    if (True(prot & MemoryProt::CpuExec)) {
+    if (True(prot & MemoryProt::CpuExec) && !file->mono_jit) {
         // On real hardware, execute permissions are silently removed.
         prot &= ~MemoryProt::CpuExec;
     }
@@ -811,6 +824,12 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
     file->handle->Map(reinterpret_cast<u8*>(mapped_addr), size, phys_addr, std::bit_cast<u32>(prot),
                       map_ctx);
 
+#if defined(__linux__) && defined(__x86_64__)
+    if (file->mono_jit) {
+        MonoJitMemory::Instance().Map(mapped_addr, size, static_cast<int>(handle), phys_addr,
+                                      static_cast<int>(prot));
+    }
+#endif
     *out_addr = std::bit_cast<void*>(mapped_addr);
     return ORBIS_OK;
 }
@@ -993,6 +1012,10 @@ u64 MemoryManager::UnmapBytesFromEntry(VAddr virtual_addr, VirtualMemoryArea vma
 }
 
 s32 MemoryManager::UnmapMemoryImpl(VAddr virtual_addr, u64 size) {
+#if defined(__linux__) && defined(__x86_64__)
+    MonoJitMemory::Instance().Unmap(virtual_addr, size);
+#endif
+
     u64 unmapped_bytes = 0;
     do {
         auto it = FindVMA(virtual_addr + unmapped_bytes);

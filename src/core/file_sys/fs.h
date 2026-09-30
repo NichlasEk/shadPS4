@@ -135,6 +135,10 @@ enum class FileType {
 };
 
 struct File {
+    // Opt-in Mono JIT objects use ordinary descriptor lifetime, but retain
+    // executable/shared mmap permissions which ordinary files do not have.
+    bool mono_jit = false;
+    u32 mono_jit_protection = 0;
     std::atomic_bool is_opened{};
     std::atomic<FileType> type{FileType::Regular};
     std::filesystem::path m_host_name;
