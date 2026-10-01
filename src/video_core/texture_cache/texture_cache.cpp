@@ -489,6 +489,10 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
 
+    // A recycled allocation may have uploaded new texels since the smaller
+    // cached image was last sampled. Refresh it before preserving its levels;
+    // otherwise CopyImage overwrites freshly uploaded mip zero with stale data.
+    RefreshImage(src_image);
     RefreshImage(new_image);
     new_image.CopyImage(src_image);
 
