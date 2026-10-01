@@ -215,7 +215,10 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
     FIBER_EXIT;
 }
 
-Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb) {
+Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb,
+                                          std::unique_ptr<OwnedCmdBuffers> owned) {
+    // Oversized copies stay alive until this coroutine and its CE task finish.
+    (void)owned;
     FIBER_ENTER(dcb_task_name);
 
     cblock.Reset();
@@ -1211,11 +1214,23 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
+    std::unique_ptr<OwnedCmdBuffers> owned;
     if (EmulatorSettings.IsCopyGpuBuffers()) {
-        std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
+        if (dcb.size() > queue.dcb_buffer.capacity() - queue.dcb_buffer_offset ||
+            ccb.size() > queue.ccb_buffer.capacity() - queue.ccb_buffer_offset) {
+            // Growing the shared vectors would invalidate spans held by pending
+            // tasks. Give overflow submissions their own immutable storage.
+            owned = std::make_unique<OwnedCmdBuffers>();
+            owned->dcb.assign(dcb.begin(), dcb.end());
+            owned->ccb.assign(ccb.begin(), ccb.end());
+            dcb = owned->dcb;
+            ccb = owned->ccb;
+        } else {
+            std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
+        }
     }
 
-    auto task = ProcessGraphics(dcb, ccb);
+    auto task = ProcessGraphics(dcb, ccb, std::move(owned));
     {
         std::scoped_lock lock{queue.m_access};
         queue.submits.emplace(task.handle);

@@ -7,6 +7,7 @@
 #include <coroutine>
 #include <exception>
 #include <mutex>
+#include <memory>
 #include <semaphore>
 #include <span>
 #include <thread>
@@ -178,7 +179,11 @@ private:
 
     using CmdBuffer = std::pair<std::span<const u32>, std::span<const u32>>;
     CmdBuffer CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb);
-    Task ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb);
+    struct OwnedCmdBuffers {
+        std::vector<u32> dcb, ccb;
+    };
+    Task ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb,
+                         std::unique_ptr<OwnedCmdBuffers> owned = {});
     Task ProcessCeUpdate(std::span<const u32> ccb);
     template <bool is_indirect = false>
     Task ProcessCompute(std::span<const u32> acb, u32 vqid);
