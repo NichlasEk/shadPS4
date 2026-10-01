@@ -1146,7 +1146,16 @@ void Translator::EmitFetch(const GcnInst& inst) {
             IR::ApplyReadNumberConversionVec4(ir, values, buffer.GetNumberConversion());
         const auto swizzled = ApplySwizzle(ir, converted, buffer.DstSelect());
         for (u32 i = 0; i < 4; i++) {
-            ir.SetVectorReg(dst_reg++, IR::F32{ir.CompositeExtract(swizzled, i)});
+            auto value = IR::F32{ir.CompositeExtract(swizzled, i)};
+            // VGPRs carry integer bits for integer vertex formats. A constant
+            // ONE swizzle must carry 0x00000001, not float 1.0 (0x3f800000).
+            if (buffer.GetNumberConversion() == AmdGpu::NumberConversion::None &&
+                (buffer.GetNumberFmt() == AmdGpu::NumberFormat::Uint ||
+                 buffer.GetNumberFmt() == AmdGpu::NumberFormat::Sint) &&
+                buffer.DstSelect().array[i] == AmdGpu::CompSwizzle::One) {
+                value = ir.BitCast<IR::F32>(ir.Imm32(1u));
+            }
+            ir.SetVectorReg(dst_reg++, value);
         }
     }
 }
