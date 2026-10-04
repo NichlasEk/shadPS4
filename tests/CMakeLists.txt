@@ -330,3 +330,8 @@ gtest_discover_tests(shadps4_http_test
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     DISCOVERY_TIMEOUT 60
 )
+
+# Pure protocol tests have no renderer or guest dependency.
+add_executable(shadps4_gnm_validation_test test_gnm_validation.cpp)
+target_include_directories(shadps4_gnm_validation_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME gnm_submission_validation COMMAND shadps4_gnm_validation_test)

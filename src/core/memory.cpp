@@ -1029,6 +1029,27 @@ s32 MemoryManager::UnmapMemoryImpl(VAddr virtual_addr, u64 size) {
     return ORBIS_OK;
 }
 
+bool MemoryManager::IsRangeAccessible(VAddr address, u64 size, MemoryProt required, bool any_read) {
+    if (!address || !size || size > UINT64_MAX - address) return false;
+    std::shared_lock lock{mutex};
+    while (size) {
+        auto it = vma_map.upper_bound(address);
+        if (it == vma_map.begin()) return false;
+        const auto& area = std::prev(it)->second;
+        if (!area.IsMapped() || address < area.base || address - area.base >= area.size)
+            return false;
+        const auto protection = static_cast<u32>(area.prot);
+        const auto wanted = static_cast<u32>(required);
+        if (any_read ? !(protection & (static_cast<u32>(MemoryProt::CpuRead) |
+                                     static_cast<u32>(MemoryProt::GpuRead)))
+                     : (protection & wanted) != wanted) return false;
+        const auto available = std::min<u64>(size, area.size - (address - area.base));
+        size -= available;
+        address += available;
+    }
+    return true;
+}
+
 s32 MemoryManager::QueryProtection(VAddr addr, void** start, void** end, u32* prot) {
     std::shared_lock lk{mutex};
     VAddr min_query_addr = impl.SystemManagedVirtualBase();

@@ -139,6 +139,7 @@ s32 PS4_SYSV_ABI sceVideoOutColorSettingsSetGamma(SceVideoOutColorSettings* sett
 s32 PS4_SYSV_ABI sceVideoOutAdjustColor(s32 handle, const SceVideoOutColorSettings* settings);
 
 // Internal system functions
+bool IsBufferLabelRange(u64 address, u64 size);
 s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, void** unk);
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym);

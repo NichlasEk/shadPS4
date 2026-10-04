@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "gnm_error.h"
+#include "gnm_validation.h"
+#include <cstdlib>
 #include "gnmdriver.h"
 
 #include "common/assert.h"
@@ -2085,18 +2087,82 @@ int PS4_SYSV_ABI sceGnmSqttWaitForEvent() {
     return ORBIS_GNM_ERROR_FAILURE;
 }
 
+static bool StrictGnmValidation() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SHADPS4_GNM_VALIDATION");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+static bool CheckGnmMemory(std::uint64_t address, std::uint64_t size, Validation::Access access) {
+    if (access != Validation::Access::Read) {
+        // VideoOut currently exposes its own host allocation as firmware labels.
+        // Accept only that exact allocation; arbitrary host pointers remain invalid.
+        if (VideoOut::IsBufferLabelRange(address, size)) return true;
+        if (!Validation::GpuRange(address, size)) return false;
+    }
+    const auto required = access == Validation::Access::GpuWrite ? Core::MemoryProt::GpuWrite
+                         : access == Validation::Access::GpuRead ? Core::MemoryProt::GpuRead
+                                                                : Core::MemoryProt::CpuRead;
+    return Core::Memory::Instance()->IsRangeAccessible(address, size, required,
+                                                      access == Validation::Access::Read);
+}
+
+static s32 ValidateGnmSubmission(u32 count, const u32* const* dcbs, const u32* sizes,
+                                const u32* const* ccbs, const u32* csizes) {
+    const auto result = Validation::Submission(count, dcbs, sizes, ccbs, csizes,
+                                                StrictGnmValidation(), CheckGnmMemory);
+    if (!result) {
+        LOG_ERROR(Lib_GnmDriver,
+                  "GNM validation rejected {}[{}] word {}: {} (code {:#010x})",
+                  result.constant ? "CCB" : "DCB", result.buffer, result.word,
+                  result.reason, static_cast<u32>(result.code));
+    }
+    return result.code;
+}
+
 static inline s32 PatchFlipRequest(u32* cmdbuf, u32 size, u32 vo_handle, u32 buf_idx, u32 flip_mode,
                                    s64 flip_arg, void* unk) {
     // check for `prepareFlip` packet
+    if (!cmdbuf || size < 64 || cmdbuf[size - 64] != 0xc03e1000) {
+        LOG_ERROR(Lib_GnmDriver, "Missing or truncated prepareFlip packet");
+        return ORBIS_GNM_ERROR_SUBMISSION_AND_FLIP_FAILED_INVALID_COMMAND_BUFFER;
+    }
     cmdbuf += size - 64;
-    ASSERT_MSG(cmdbuf[0] == 0xc03e1000, "Can't find `prepareFlip` packet");
 
     std::array<u32, 7> backup{};
     std::memcpy(backup.data(), cmdbuf, backup.size() * sizeof(decltype(backup)::value_type));
 
-    ASSERT_MSG(((backup[2] & 3) == 0u) || (backup[1] != PM4CmdNop::PayloadType::PrepareFlipLabel),
-               "Invalid flip packet");
-    ASSERT_MSG(buf_idx != 0xffff'ffffu, "Invalid VO buffer index");
+    if (((backup[2] & 3) != 0u && backup[1] == PM4CmdNop::PayloadType::PrepareFlipLabel) ||
+        buf_idx == 0xffff'ffffu) {
+        LOG_ERROR(Lib_GnmDriver, "Invalid prepareFlip label alignment or buffer index");
+        return ORBIS_GNM_ERROR_SUBMISSION_AND_FLIP_FAILED_INVALID_COMMAND_BUFFER;
+    }
+
+    switch (backup[1]) {
+    case PM4CmdNop::PayloadType::PrepareFlip:
+    case PM4CmdNop::PayloadType::PrepareFlipLabel:
+    case PM4CmdNop::PayloadType::PrepareFlipInterrupt:
+    case PM4CmdNop::PayloadType::PrepareFlipInterruptLabel:
+        break;
+    default:
+        LOG_ERROR(Lib_GnmDriver, "Unknown prepareFlip payload {:#x}", backup[1]);
+        return ORBIS_GNM_ERROR_SUBMISSION_AND_FLIP_FAILED_INVALID_COMMAND_BUFFER;
+    }
+    if (StrictGnmValidation() &&
+        (backup[1] == PM4CmdNop::PayloadType::PrepareFlipLabel ||
+         backup[1] == PM4CmdNop::PayloadType::PrepareFlipInterruptLabel)) {
+        const u64 address = u64(backup[2]) | (u64(backup[3]) << 32);
+        if (address % 4 || !CheckGnmMemory(address, 4, Validation::Access::GpuWrite)) {
+            LOG_ERROR(Lib_GnmDriver, "prepareFlip label is not GPU-writable; code {:#010x}",
+                      u32(ORBIS_GNM_ERROR_VALIDATION_WRITE_EVENT_OP));
+            return ORBIS_GNM_ERROR_VALIDATION_WRITE_EVENT_OP;
+        }
+    }
+    uintptr_t label_addr{};
+    const auto label_result = VideoOut::sceVideoOutGetBufferLabelAddress(vo_handle, &label_addr);
+    if (label_result < 0) return label_result;
 
     const s32 flip_result = VideoOut::sceVideoOutSubmitEopFlip(vo_handle, buf_idx, flip_mode,
                                                                flip_arg, nullptr /*unk*/);
@@ -2109,10 +2175,6 @@ static inline s32 PatchFlipRequest(u32* cmdbuf, u32 size, u32 vo_handle, u32 buf
             return flip_result;
         }
     }
-
-    uintptr_t label_addr{};
-    ASSERT_MSG(VideoOut::sceVideoOutGetBufferLabelAddress(vo_handle, &label_addr) == 16,
-               "sceVideoOutGetBufferLabelAddress call failed");
 
     // Write event to lock the VO surface
     auto* write_lock = reinterpret_cast<PM4CmdWriteData*>(cmdbuf);
@@ -2183,6 +2245,15 @@ s32 PS4_SYSV_ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
     u32* ccb_sizes_in_bytes, u32 vo_handle, u32 buf_idx, u32 flip_mode, s64 flip_arg) {
     LOG_DEBUG(Lib_GnmDriver, "called [buf = {}]", buf_idx);
 
+    const auto validation = ValidateGnmSubmission(count, dcb_gpu_addrs, dcb_sizes_in_bytes,
+                                                    ccb_gpu_addrs, ccb_sizes_in_bytes);
+    if (validation != ORBIS_OK) return validation;
+    const auto last_bytes = dcb_sizes_in_bytes[count - 1];
+    if (!Core::Memory::Instance()->IsRangeAccessible(
+            reinterpret_cast<VAddr>(dcb_gpu_addrs[count - 1]), last_bytes, Core::MemoryProt::CpuWrite)) {
+        LOG_ERROR(Lib_GnmDriver, "prepareFlip command buffer must be CPU-writable");
+        return ORBIS_GNM_ERROR_SUBMISSION_AND_FLIP_FAILED_INVALID_COMMAND_BUFFER;
+    }
     auto* cmdbuf = dcb_gpu_addrs[count - 1];
     const auto size_dw = dcb_sizes_in_bytes[count - 1] / 4;
 
@@ -2205,27 +2276,9 @@ int PS4_SYSV_ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
     HLE_TRACE;
     LOG_DEBUG(Lib_GnmDriver, "called");
 
-    if (!dcb_gpu_addrs || !dcb_sizes_in_bytes) {
-        LOG_ERROR(Lib_GnmDriver, "dcbGpuAddrs and dcbSizesInBytes must not be NULL");
-        return 0x80d11000;
-    }
-
-    for (u32 i = 0; i < count; i++) {
-        if (dcb_sizes_in_bytes[i] == 0) {
-            LOG_ERROR(Lib_GnmDriver, "Submitting a null DCB {}", i);
-            return 0x80d11000;
-        }
-        if (dcb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "dcbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      dcb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
-        if (ccb_sizes_in_bytes && ccb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "ccbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      ccb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
-    }
+    const auto validation = ValidateGnmSubmission(count, dcb_gpu_addrs, dcb_sizes_in_bytes,
+                                                    ccb_gpu_addrs, ccb_sizes_in_bytes);
+    if (validation != ORBIS_OK) return validation;
 
     WaitGpuIdle();
 
@@ -2587,8 +2640,8 @@ int PS4_SYSV_ABI sceGnmValidateGetVersion() {
 
 bool PS4_SYSV_ABI sceGnmValidateOnSubmitEnabled() {
     LOG_TRACE(Lib_GnmDriver, "called");
-    // Not available in retail firmware
-    return false;
+    // Explicit emulator diagnostic mode; retail defaults remain disabled.
+    return StrictGnmValidation();
 }
 
 int PS4_SYSV_ABI sceGnmValidateResetState() {

@@ -330,6 +330,15 @@ s32 PS4_SYSV_ABI sceVideoOutUnregisterBuffers(s32 handle, s32 attributeIndex) {
     return driver->UnregisterBuffers(port, attributeIndex);
 }
 
+bool IsBufferLabelRange(u64 address, u64 size) {
+    if (!driver || !size) return false;
+    const auto* port = driver->GetPort(1);
+    if (!port) return false;
+    const auto base = reinterpret_cast<uintptr_t>(port->buffer_labels.data());
+    const auto length = sizeof(port->buffer_labels);
+    return address >= base && address - base < length && size <= length - (address - base);
+}
+
 s32 PS4_SYSV_ABI sceVideoOutGetBufferLabelAddress(s32 handle, uintptr_t* label_addr) {
     if (label_addr == nullptr) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
