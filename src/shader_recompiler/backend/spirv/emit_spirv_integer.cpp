@@ -118,7 +118,9 @@ Id EmitINeg64(EmitContext& ctx, Id value) {
 }
 
 Id EmitIAbs32(EmitContext& ctx, Id value) {
-    return ctx.OpSAbs(ctx.U32[1], value);
+    // Keep two's-complement semantics (including INT_MIN) without GLSL SAbs.
+    const Id sign = ctx.OpShiftRightArithmetic(ctx.U32[1], value, ctx.ConstU32(31u));
+    return ctx.OpISub(ctx.U32[1], ctx.OpBitwiseXor(ctx.U32[1], value, sign), sign);
 }
 
 Id EmitShiftLeftLogical32(EmitContext& ctx, Id base, Id shift) {
