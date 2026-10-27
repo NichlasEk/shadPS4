@@ -481,7 +481,9 @@ void Translator::S_MOVK(const GcnInst& inst, bool is_conditional) {
 }
 
 void Translator::S_CMPK(ConditionOp cond, bool is_signed, const GcnInst& inst) {
-    const s32 simm16 = inst.control.sopk.simm;
+    // Unsigned comparisons zero-extend the immediate; 0xffff must remain 65535.
+    const u32 simm16 = is_signed ? static_cast<u32>(static_cast<s32>(inst.control.sopk.simm))
+                                : static_cast<u16>(inst.control.sopk.simm);
     const IR::U32 lhs = GetSrc(inst.dst[0]);
     const IR::U32 rhs = ir.Imm32(simm16);
     const IR::U1 result = [&] {
