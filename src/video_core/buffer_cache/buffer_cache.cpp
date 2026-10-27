@@ -313,9 +313,16 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         if (src_gds) {
             return gds_buffer;
         }
-        const auto buffer_id = FindBuffer(src, num_bytes);
+        // A DMA packet may cover only the start of a larger rendered image.
+        // Image download requires space for its complete mip layout; otherwise
+        // the first packet and subsequent chunks copy stale guest memory.
+        const auto image_id = texture_cache.FindImageFromRange(src, num_bytes);
+        const u32 source_size = image_id
+                                    ? std::max(num_bytes, texture_cache.GetImage(image_id).info.guest_size)
+                                    : num_bytes;
+        const auto buffer_id = FindBuffer(src, source_size);
         auto& buffer = slot_buffers[buffer_id];
-        SynchronizeBuffer(buffer, src, num_bytes, false, true);
+        SynchronizeBuffer(buffer, src, source_size, false, true);
         return buffer;
     }();
     auto& dst_buffer = [&] -> const Buffer& {
