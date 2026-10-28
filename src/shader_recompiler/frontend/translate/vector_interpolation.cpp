@@ -105,8 +105,13 @@ void Translator::V_INTERP_MOV_F32(const GcnInst& inst) {
     ASSERT(attr.is_flat || src_select == 2 ||
            profile.supports_amd_shader_explicit_vertex_parameter ||
            profile.supports_fragment_shader_barycentric);
-    if (profile.supports_amd_shader_explicit_vertex_parameter ||
-        profile.supports_fragment_shader_barycentric) {
+    if (attr.is_flat && src_select == 2) {
+        // With FLAT_SHADE enabled, P0 is the provoking vertex, not the
+        // literal first vertex of a per-vertex barycentric input array.
+        interp.primary = Qualifier::Flat;
+        SetDst(inst.dst[0], ir.GetAttribute(attrib, inst.control.vintrp.chan));
+    } else if (profile.supports_amd_shader_explicit_vertex_parameter ||
+               profile.supports_fragment_shader_barycentric) {
         // VSRC 0=P10, 1=P20, 2=P0
         interp.primary = Qualifier::PerVertex;
         IR::F32 result = ir.GetAttribute(attrib, inst.control.vintrp.chan, (src_select + 1) % 3);
