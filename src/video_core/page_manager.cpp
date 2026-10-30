@@ -204,7 +204,15 @@ struct PageManager::Impl {
         auto& impl = memory->GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
-        impl.Protect(address, size, perms);
+        // Cache regions can outlive their GPU mapping and overlap a new CPU-only
+        // file mapping. Updating watcher counts must not restore RW access to
+        // that file. Hold the mapping read lock while protecting only live GPU
+        // intervals; unmapping removes them before their address can be reused.
+        rasterizer->ForEachMappedRangeInRange(address, size, [&](const auto& range) {
+            const VAddr begin = boost::icl::lower(range);
+            const VAddr end = boost::icl::upper(range);
+            impl.Protect(begin, end - begin, perms);
+        });
     }
 
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
