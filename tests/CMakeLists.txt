@@ -335,3 +335,9 @@ gtest_discover_tests(shadps4_http_test
 add_executable(shadps4_gnm_validation_test test_gnm_validation.cpp)
 target_include_directories(shadps4_gnm_validation_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME gnm_submission_validation COMMAND shadps4_gnm_validation_test)
+
+# Mapping intersections: standalone equivalence/allocation regression test.
+add_executable(shadps4_interval_visit_test test_interval_visit.cpp)
+target_include_directories(shadps4_interval_visit_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(shadps4_interval_visit_test PRIVATE Boost::headers)
+add_test(NAME mapped_interval_visit COMMAND shadps4_interval_visit_test)

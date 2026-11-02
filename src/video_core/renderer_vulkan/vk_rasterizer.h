@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "common/interval_visit.h"
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -78,9 +79,7 @@ public:
     void ForEachMappedRangeInRange(VAddr addr, u64 size, Func&& func) {
         const auto range = decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
         Common::RecursiveSharedLock lock{mapped_ranges_mutex};
-        for (const auto& mapped_range : (mapped_ranges & range)) {
-            func(mapped_range);
-        }
+        Common::VisitIntervalIntersections(mapped_ranges, range, func);
     }
 
 private:
